@@ -1,0 +1,5 @@
+@keyframes orb-pulse {
+  0%, 100% { transform: scale(1); filter: brightness(100%); }
+  50% { transform: scale(1.08); filter: brightness(130%); }
+}
+.orb-active { animation: orb-pulse 2s infinite ease-in-out; }
