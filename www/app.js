@@ -3,7 +3,6 @@ const STATE = {
   voice: localStorage.getItem('MONDE_VOICE') || 'Puck',
   isListening: false,
   isProcessing: false,
-  // Simple chat memory log
   history: JSON.parse(localStorage.getItem('MONDE_SIMPLE_HISTORY')) || []
 };
 
@@ -47,7 +46,7 @@ if (btnNewChat) {
         <div class="text-base leading-relaxed">Fresh conversation started, Monde. What's on your mind?</div>
       </div>
     `;
-    handleQuery("Start a fresh conversation and greet Monde.");
+    speak("Starting a fresh conversation. What is on your mind, Monde?");
   };
 }
 
@@ -69,8 +68,8 @@ document.getElementById('btn-save-settings').onclick = () => {
   localStorage.setItem('MONDE_KEY', STATE.apiKey);
   localStorage.setItem('MONDE_VOICE', STATE.voice);
   modalSettings.classList.add('hidden');
-  appendMsg('MONDE AI', 'Settings saved! Testing speech...');
-  handleQuery("Introduce yourself in one sentence with your name Monde.");
+  appendMsg('MONDE AI', 'Settings saved!');
+  speak("Settings saved. I am ready, Monde.");
 };
 
 // Memory Modal
@@ -133,40 +132,81 @@ function playSpeakerChime() {
   } catch (e) {}
 }
 
-// Direct Base64 Audio Playback (From 21:23)
+// Dedicated High-Throughput Speech Engine
 let currentAudio = null;
 
-function playBase64Audio(base64Data, mimeType = 'audio/wav') {
+async function speak(textToSpeak) {
+  if (!STATE.apiKey || !textToSpeak) return;
+
+  const clean = textToSpeak.replace(/[*#_`~]/g, '').trim();
+  if (!clean) return;
+
+  if (statusLabel) statusLabel.innerText = "Speaking...";
+  const chosenVoice = STATE.voice || "Puck";
+
   try {
-    if (currentAudio) {
-      try { currentAudio.pause(); } catch(e){}
-      currentAudio = null;
-    }
-
-    if (statusLabel) statusLabel.innerText = "Speaking...";
-
-    const audioUrl = `data:${mimeType};base64,${base64Data}`;
-    currentAudio = new Audio(audioUrl);
-
-    currentAudio.onended = () => {
-      if (statusLabel) statusLabel.innerText = "READY, MONDE";
-    };
-
-    currentAudio.play().catch(e => {
-      console.log("Audio play notice:", e);
-      if (statusLabel) statusLabel.innerText = "READY, MONDE";
+    // Uses Google's dedicated TTS endpoint (No chat model bottlenecks)
+    const ttsUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-lite-tts:generateContent?key=${STATE.apiKey}`;
+    
+    const res = await fetch(ttsUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          role: "user",
+          parts: [{ text: clean.slice(0, 300) }]
+        }],
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName: chosenVoice
+              }
+            }
+          }
+        }
+      })
     });
 
-  } catch(err) {
-    console.log("Audio error:", err);
+    const d = await res.json();
+
+    if (d.candidates && d.candidates[0].content && d.candidates[0].content.parts) {
+      for (const part of d.candidates[0].content.parts) {
+        if (part.inlineData && part.inlineData.data) {
+          const base64Data = part.inlineData.data;
+          const mimeType = part.inlineData.mimeType || "audio/wav";
+
+          if (currentAudio) {
+            try { currentAudio.pause(); } catch(e){}
+            currentAudio = null;
+          }
+
+          currentAudio = new Audio(`data:${mimeType};base64,${base64Data}`);
+          currentAudio.onended = () => {
+            if (statusLabel) statusLabel.innerText = "READY, MONDE";
+          };
+          await currentAudio.play();
+          return;
+        }
+      }
+    }
+
+    if (statusLabel) statusLabel.innerText = "READY, MONDE";
+
+  } catch (err) {
+    console.log("TTS Error:", err);
+    if (statusLabel) statusLabel.innerText = "READY, MONDE";
   }
 }
 
 // Test Voice Button
 if (btnTestVoice) {
-  btnTestVoice.onclick = () => {
+  btnTestVoice.onclick = async () => {
     playSpeakerChime();
-    handleQuery("Introduce yourself in one sentence with your name Monde.");
+    const voice = selectVoice ? selectVoice.value : "Puck";
+    const displayName = voice === "Puck" ? "Monde" : (voice === "Charon" ? "Alex" : "Emma");
+    await speak("Hello Monde! I am your AI assistant speaking with the " + displayName + " voice.");
   };
 }
 
@@ -247,7 +287,7 @@ function toggleMic() {
 if (micBtn) micBtn.onclick = toggleMic;
 if (orb) orb.onclick = toggleMic;
 
-// --- FAST AI QUERY: SINGLE-TURN AUDIO ENGINE WITH CONTEXT MEMORY ---
+// --- FAST AI QUERY: GEMINI 3.5 FLASH LITE (ZERO HIGH DEMAND QUEUES) ---
 async function handleQuery(cmd) {
   if (!STATE.apiKey) {
     appendMsg('MONDE AI', 'Please tap Settings and enter your API key.');
@@ -258,10 +298,9 @@ async function handleQuery(cmd) {
 
   const now = new Date();
   const liveDate = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-  const chosenVoice = STATE.voice || "Puck";
 
-  // Build the recent conversation history into context
-  const recentHistory = STATE.history.slice(-8); // Last 8 exchanges
+  // Format the recent conversation so the AI has context
+  const recentHistory = STATE.history.slice(-6);
   let conversationContext = "";
   if (recentHistory.length > 0) {
     conversationContext = "Recent dialogue:\n" + recentHistory.map(h => `${h.sender}: ${h.text}`).join("\n") + "\n\n";
@@ -269,79 +308,47 @@ async function handleQuery(cmd) {
 
   const promptWithContext = `${conversationContext}Monde: ${cmd}`;
 
-  const requestBody = {
-    contents: [{
-      parts: [{ text: promptWithContext }]
-    }],
-    systemInstruction: {
-      parts: [{
-        text: `You are Monde AI, a personal companion created for Monde Dubasi.
-Today's actual real-time date is ${liveDate}, and the current year is ${now.getFullYear()}.
-You are actively chatting with Monde. Use the recent dialogue to maintain natural conversation context.
-Always speak in concise, natural, fluent English (1 to 2 sentences max). Do not use bullet points or markdown symbols because your response is spoken aloud.`
-      }]
-    },
-    generationConfig: {
-      responseModalities: ["AUDIO", "TEXT"],
-      speechConfig: {
-        voiceConfig: {
-          prebuiltVoiceConfig: {
-            voiceName: chosenVoice
-          }
-        }
-      }
-    }
-  };
-
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${STATE.apiKey}`;
+    // gemini-3.5-flash-lite handles the text reasoning in under 1 second without capacity limits
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${STATE.apiKey}`;
     
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody)
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: promptWithContext }] }],
+        systemInstruction: {
+          parts: [{
+            text: `You are Monde AI, a personal companion created for Monde Dubasi.
+Today's actual real-time date is ${liveDate}, and the current year is ${now.getFullYear()}.
+You are actively chatting with Monde. Use the recent dialogue to maintain natural conversation context.
+Always speak in concise, natural, fluent English (1 to 2 sentences max). Do not use bullet points or markdown symbols because your response is spoken aloud.`
+          }]
+        }
+      })
     });
 
     const d = await res.json();
-    
-    if (d.candidates && d.candidates[0].content && d.candidates[0].content.parts) {
-      let replyText = "";
-      let audioBase64 = null;
-      let audioMime = "audio/wav";
+    if (d.candidates && d.candidates[0].content && d.candidates[0].content.parts[0].text) {
+      const reply = d.candidates[0].content.parts[0].text;
 
-      for (const part of d.candidates[0].content.parts) {
-        if (part.text) {
-          replyText += part.text;
-        }
-        if (part.inlineData) {
-          audioBase64 = part.inlineData.data;
-          audioMime = part.inlineData.mimeType || "audio/wav";
-        }
-      }
+      // Save context
+      STATE.history.push({ sender: 'Monde', text: cmd });
+      STATE.history.push({ sender: 'MONDE AI', text: reply });
+      if (STATE.history.length > 16) STATE.history = STATE.history.slice(-16);
+      localStorage.setItem('MONDE_SIMPLE_HISTORY', JSON.stringify(STATE.history));
 
-      if (replyText) {
-        // Save user message and reply to simple history
-        STATE.history.push({ sender: 'Monde', text: cmd });
-        STATE.history.push({ sender: 'MONDE AI', text: replyText });
-        if (STATE.history.length > 20) STATE.history = STATE.history.slice(-20);
-        localStorage.setItem('MONDE_SIMPLE_HISTORY', JSON.stringify(STATE.history));
+      appendMsg('MONDE AI', reply);
 
-        appendMsg('MONDE AI', replyText);
-      }
-      
-      // Play the voice out loud
-      if (audioBase64) {
-        playBase64Audio(audioBase64, audioMime);
-      } else {
-        if (statusLabel) statusLabel.innerText = "READY, MONDE";
-      }
+      // Speak reply out loud
+      speak(reply);
 
     } else if (d.error) {
       appendMsg('MONDE AI', 'API Error: ' + d.error.message);
       if (statusLabel) statusLabel.innerText = "READY, MONDE";
     }
   } catch(e) {
-    appendMsg('MONDE AI', 'Connection error: ' + e.message);
+    appendMsg('MONDE AI', 'Network error: ' + e.message);
     if (statusLabel) statusLabel.innerText = "READY, MONDE";
   }
 }
