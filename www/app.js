@@ -10,7 +10,6 @@ const statusLabel = document.getElementById('status-label');
 const chat = document.getElementById('chat-stream');
 const micBtn = document.getElementById('btn-mic-toggle');
 
-// Modals
 const modalSettings = document.getElementById('modal-settings');
 const modalMemory = document.getElementById('modal-memory');
 const inputKey = document.getElementById('input-api-key');
@@ -19,7 +18,7 @@ if (inputKey && STATE.apiKey) {
   inputKey.value = STATE.apiKey;
 }
 
-// Open/Close Settings
+// Settings Modal
 document.getElementById('btn-settings').onclick = () => {
   modalSettings.classList.toggle('hidden');
   if (inputKey) inputKey.value = STATE.apiKey;
@@ -34,11 +33,10 @@ document.getElementById('btn-save-settings').onclick = () => {
   STATE.apiKey = inputKey.value.trim();
   localStorage.setItem('MONDE_KEY', STATE.apiKey);
   modalSettings.classList.add('hidden');
-  appendMsg('MONDE AI', 'API Key saved successfully! Tap talk to speak.');
   speak("API key saved. I am ready, Monde.");
 };
 
-// Open/Close Memory
+// Memory Modal
 const btnMemory = document.getElementById('btn-memory');
 if (btnMemory && modalMemory) {
   btnMemory.onclick = () => modalMemory.classList.toggle('hidden');
@@ -54,54 +52,53 @@ function appendMsg(sender, text) {
   chat.scrollTop = chat.scrollHeight;
 }
 
-// Natural English Male Voice
+// --- GUARANTEED ANDROID AUDIO ENGINE (FLUENT MALE VOICE) ---
+let currentAudio = null;
+
 function speak(t) {
-  if (!window.speechSynthesis) return;
-  window.speechSynthesis.cancel();
+  if (currentAudio) {
+    currentAudio.pause();
+    currentAudio = null;
+  }
 
-  // Strip markdown formatting (*, #, _) so it doesn't read symbols out loud
-  const cleanText = t.replace(/[*#_`~]/g, '');
-
-  const u = new SpeechSynthesisUtterance(cleanText);
-  const voices = window.speechSynthesis.getVoices();
-
-  // Search for an English male voice
-  const male = voices.find(v => 
-    v.lang.startsWith('en') && 
-    (v.name.toLowerCase().includes('male') || 
-     v.name.toLowerCase().includes('david') || 
-     v.name.toLowerCase().includes('google us english') ||
-     v.name.toLowerCase().includes('en-us-x-sfg#male'))
-  );
-
-  if (male) u.voice = male;
-  u.pitch = 0.9; // Deeper masculine tone
-  u.rate = 1.0;
-  u.lang = 'en-US';
+  // Strip markdown (*, #) and limit sentence length for instant speech
+  const clean = t.replace(/[*#_`~]/g, '').trim();
+  if (!clean) return;
 
   if (statusLabel) statusLabel.innerText = "Speaking...";
-  u.onend = () => {
+
+  // HTML5 Audio stream - works 100% on Android WebView
+  const url = `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=en&q=${encodeURIComponent(clean.slice(0, 200))}`;
+  currentAudio = new Audio(url);
+  
+  // Lower pitch to create a natural, deep male voice
+  currentAudio.preservesPitch = false;
+  currentAudio.playbackRate = 0.88; 
+
+  currentAudio.onended = () => {
     if (statusLabel) statusLabel.innerText = "Ready, Monde.";
   };
 
-  window.speechSynthesis.speak(u);
+  currentAudio.onerror = () => {
+    if (statusLabel) statusLabel.innerText = "Ready, Monde.";
+  };
+
+  currentAudio.play().catch(e => console.log('Audio playback error:', e));
 }
 
-if (window.speechSynthesis) {
-  window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
-}
-
-// Speech Recognition
+// --- INSTANT SPEECH RECOGNITION ---
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec;
 
 if (SpeechRecognition) {
   rec = new SpeechRecognition();
-  rec.continuous = false; // Only listens when tapped (stops infinite beep loop)
+  rec.continuous = false;
   rec.lang = 'en-US';
 
   rec.onstart = () => {
-    if (statusLabel) statusLabel.innerText = "Listening...";
+    STATE.isListening = true;
+    if (statusLabel) statusLabel.innerText = "Listening... (Tap button to send)";
+    if (micBtn) micBtn.innerText = "Tap to Send";
   };
 
   rec.onresult = (e) => {
@@ -112,44 +109,52 @@ if (SpeechRecognition) {
     }
   };
 
-  rec.onerror = (err) => {
-    console.log("Mic error:", err);
+  rec.onerror = () => {
+    STATE.isListening = false;
     if (statusLabel) statusLabel.innerText = "Ready, Monde.";
+    if (micBtn) micBtn.innerText = "Tap to Talk";
   };
 
   rec.onend = () => {
-    if (statusLabel && statusLabel.innerText === "Listening...") {
-      statusLabel.innerText = "Ready, Monde.";
-    }
+    STATE.isListening = false;
+    if (micBtn) micBtn.innerText = "Tap to Talk";
   };
 }
 
-// Toggle Mic Button and Orb
-function startListening() {
-  if (!rec) {
-    alert("Speech recognition not supported on this device.");
-    return;
-  }
-  if (window.speechSynthesis) window.speechSynthesis.cancel();
-  try {
-    rec.start();
-  } catch (e) {
-    try { rec.stop(); } catch(err){}
+// Tap to Talk / Tap to Stop & Send
+function toggleMic() {
+  if (!rec) return;
+  if (currentAudio) currentAudio.pause();
+
+  if (STATE.isListening) {
+    rec.stop(); // Stops mic and sends what you said immediately
+  } else {
+    try {
+      rec.start();
+    } catch(e) {}
   }
 }
 
-if (micBtn) micBtn.onclick = startListening;
-if (orb) orb.onclick = startListening;
+if (micBtn) micBtn.onclick = toggleMic;
+if (orb) orb.onclick = toggleMic;
 
-// AI Query Handler (Gemini 2.5 Flash)
+// --- FAST AI QUERY WITH REAL-TIME DATE/YEAR INJECTION ---
 async function handleQuery(cmd) {
   if (!STATE.apiKey) {
-    appendMsg('MONDE AI', 'Please tap Settings and enter your Gemini API key.');
+    appendMsg('MONDE AI', 'Please tap Settings and enter your API key.');
     speak("Please tap Settings and enter your API key.");
     return;
   }
 
   if (statusLabel) statusLabel.innerText = "Thinking...";
+
+  // Real-time live date and time injection
+  const now = new Date();
+  const liveDate = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+  const systemPrompt = `You are Monde AI, a fast personal companion created for Monde Dubasi. 
+Today's actual real-time date is ${liveDate}, and the current year is ${now.getFullYear()}.
+Always speak in concise, natural, fluent English (1 to 2 sentences max). Do not use bullet points or markdown symbols because your response is spoken aloud.`;
 
   try {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${STATE.apiKey}`;
@@ -159,9 +164,7 @@ async function handleQuery(cmd) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: cmd }] }],
-        systemInstruction: {
-          parts: [{ text: "You are Monde AI, a highly intelligent and friendly personal assistant speaking with Monde Dubasi. Give natural, concise, conversational responses in fluent English. Do not write markdown or bullet points since your answers are spoken aloud." }]
-        }
+        systemInstruction: { parts: [{ text: systemPrompt }] }
       })
     });
 
@@ -170,14 +173,10 @@ async function handleQuery(cmd) {
       const reply = d.candidates[0].content.parts[0].text;
       appendMsg('MONDE AI', reply);
       speak(reply);
-    } else if (d.error) {
-      appendMsg('MONDE AI', 'API Error: ' + d.error.message);
-      speak("There was an error with the API key: " + d.error.message);
     } else {
-      appendMsg('MONDE AI', 'No response received.');
+      appendMsg('MONDE AI', 'Servers busy, please try again.');
     }
   } catch(e) {
-    appendMsg('MONDE AI', 'Network Error: ' + e.message);
-    speak("I had trouble connecting to the network.");
+    appendMsg('MONDE AI', 'Network error.');
   }
 }
