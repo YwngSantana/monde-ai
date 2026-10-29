@@ -152,7 +152,7 @@ async function handleQuery(cmd) {
   if (statusLabel) statusLabel.innerText = "Thinking...";
 
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${STATE.apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${STATE.apiKey}`;
     
     const res = await fetch(url, {
       method: 'POST',
