@@ -3,6 +3,8 @@ const STATE = {
   voice: localStorage.getItem('MONDE_VOICE') || 'Puck',
   isListening: false,
   isProcessing: false,
+  // Ongoing conversation context memory
+  history: JSON.parse(localStorage.getItem('MONDE_CHAT_HISTORY')) || [],
   memories: JSON.parse(localStorage.getItem('MONDE_MEMORIES')) || []
 };
 
@@ -10,6 +12,7 @@ const orb = document.getElementById('orb-core');
 const statusLabel = document.getElementById('status-label');
 const chat = document.getElementById('chat-stream');
 const micBtn = document.getElementById('btn-mic-toggle');
+const btnNewChat = document.getElementById('btn-new-chat');
 
 const modalSettings = document.getElementById('modal-settings');
 const modalMemory = document.getElementById('modal-memory');
@@ -23,6 +26,33 @@ const textSendBtn = document.getElementById('btn-text-send');
 
 if (inputKey && STATE.apiKey) inputKey.value = STATE.apiKey;
 if (selectVoice && STATE.voice) selectVoice.value = STATE.voice;
+
+// Reload past messages if opening the app
+window.onload = () => {
+  if (STATE.history.length > 0) {
+    chat.innerHTML = '';
+    STATE.history.forEach(item => {
+      const sender = item.role === 'user' ? 'Monde' : 'MONDE AI';
+      const text = item.parts[0].text;
+      renderBubble(sender, text);
+    });
+  }
+};
+
+// + New Chat Handler: Clears the current topic and starts fresh
+if (btnNewChat) {
+  btnNewChat.onclick = () => {
+    STATE.history = [];
+    localStorage.removeItem('MONDE_CHAT_HISTORY');
+    chat.innerHTML = `
+      <div class="p-3.5 bg-slate-800/90 rounded-2xl text-slate-100 border border-slate-700/60 mr-6 shadow-sm">
+        <div class="text-[11px] font-bold text-cyan-400 mb-1 uppercase tracking-wider">MONDE AI</div>
+        <div class="text-base leading-relaxed">Fresh conversation started, Monde. What's on your mind?</div>
+      </div>
+    `;
+    speak("Starting a fresh conversation. What is on your mind, Monde?");
+  };
+}
 
 // Settings Modal
 document.getElementById('btn-settings').onclick = () => {
@@ -55,8 +85,8 @@ if (btnCloseMemory && modalMemory) {
   btnCloseMemory.onclick = () => modalMemory.classList.add('hidden');
 }
 
-// Chat UI
-function appendMsg(sender, text) {
+// Bubble Renderer
+function renderBubble(sender, text) {
   if (!chat) return;
   const d = document.createElement('div');
   
@@ -76,6 +106,10 @@ function appendMsg(sender, text) {
 
   chat.appendChild(d);
   chat.scrollTop = chat.scrollHeight;
+}
+
+function appendMsg(sender, text) {
+  renderBubble(sender, text);
 }
 
 // Hardware Speaker Test Chime
@@ -101,7 +135,7 @@ function playSpeakerChime() {
   } catch (e) {}
 }
 
-// --- DEDICATED HIGH-THROUGHPUT VOICE ENGINE ---
+// Dedicated High-Throughput Voice Engine
 let currentAudio = null;
 
 async function speak(textToSpeak) {
@@ -256,7 +290,7 @@ function toggleMic() {
 if (micBtn) micBtn.onclick = toggleMic;
 if (orb) orb.onclick = toggleMic;
 
-// --- FAST AI QUERY (GEMINI 3.5 FLASH LITE - NO DEMAND SPIKES) ---
+// --- FULL CONVERSATIONAL MEMORY QUERY ---
 async function handleQuery(cmd) {
   if (!STATE.apiKey) {
     appendMsg('MONDE AI', 'Please tap Settings and enter your API key.');
@@ -270,7 +304,20 @@ async function handleQuery(cmd) {
 
   const systemPrompt = `You are Monde AI, a personal companion created for Monde Dubasi. 
 Today's actual real-time date is ${liveDate}, and the current year is ${now.getFullYear()}.
+You are having an active, flowing, conversational dialogue with Monde. 
+Pay close attention to what was said previously in this conversation and build upon it naturally.
 Always speak in concise, natural, fluent English (1 to 2 sentences max). Do not use bullet points or markdown symbols because your response is spoken aloud.`;
+
+  // 1. Add current user message to conversation history
+  STATE.history.push({
+    role: "user",
+    parts: [{ text: cmd }]
+  });
+
+  // Keep last 16 turns so the context stays rich without overloading tokens
+  if (STATE.history.length > 16) {
+    STATE.history = STATE.history.slice(-16);
+  }
 
   try {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${STATE.apiKey}`;
@@ -279,7 +326,7 @@ Always speak in concise, natural, fluent English (1 to 2 sentences max). Do not 
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: cmd }] }],
+        contents: STATE.history, // Sends the full conversational stream!
         systemInstruction: { parts: [{ text: systemPrompt }] }
       })
     });
@@ -287,9 +334,17 @@ Always speak in concise, natural, fluent English (1 to 2 sentences max). Do not 
     const d = await res.json();
     if (d.candidates && d.candidates[0].content && d.candidates[0].content.parts[0].text) {
       const reply = d.candidates[0].content.parts[0].text;
-      appendMsg('MONDE AI', reply);
       
-      // Speak the reply out loud
+      // 2. Add AI reply to conversation history so it remembers next turn!
+      STATE.history.push({
+        role: "model",
+        parts: [{ text: reply }]
+      });
+
+      // Save conversation state
+      localStorage.setItem('MONDE_CHAT_HISTORY', JSON.stringify(STATE.history));
+
+      appendMsg('MONDE AI', reply);
       speak(reply);
     } else if (d.error) {
       appendMsg('MONDE AI', 'API Error: ' + d.error.message);
