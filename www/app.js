@@ -42,8 +42,7 @@ document.getElementById('btn-save-settings').onclick = () => {
   localStorage.setItem('MONDE_KEY', STATE.apiKey);
   localStorage.setItem('MONDE_VOICE', STATE.voice);
   modalSettings.classList.add('hidden');
-  appendMsg('MONDE AI', 'Settings saved! Testing speech...');
-  handleQuery("Say hello to Monde and confirm your voice is ready.");
+  speak("Settings saved. I am ready, Monde.");
 };
 
 // Memory Modal
@@ -56,7 +55,7 @@ if (btnCloseMemory && modalMemory) {
   btnCloseMemory.onclick = () => modalMemory.classList.add('hidden');
 }
 
-// Big, Clean Chat Bubbles
+// Chat UI
 function appendMsg(sender, text) {
   if (!chat) return;
   const d = document.createElement('div');
@@ -79,7 +78,7 @@ function appendMsg(sender, text) {
   chat.scrollTop = chat.scrollHeight;
 }
 
-// --- HARDWARE SPEAKER CHIME (PROVES PHONE SPEAKER IS AUDIBLE) ---
+// Hardware Speaker Test Chime
 function playSpeakerChime() {
   try {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -89,63 +88,94 @@ function playSpeakerChime() {
     const gain = ctx.createGain();
 
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5 note
-    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.15); // A5 note
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.15);
 
-    gain.gain.setValueAtTime(0.4, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
 
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.start();
-    osc.stop(ctx.currentTime + 0.35);
-  } catch (e) {
-    console.log("Speaker chime error:", e);
-  }
+    osc.stop(ctx.currentTime + 0.3);
+  } catch (e) {}
 }
 
-// --- AUDIO PLAYER (PLAYS DIRECT BASE64 AUDIO WITH ZERO NETWORK CALLS) ---
+// --- DEDICATED HIGH-THROUGHPUT VOICE ENGINE ---
 let currentAudio = null;
 
-function playBase64Audio(base64Data, mimeType = 'audio/wav') {
+async function speak(textToSpeak) {
+  if (!STATE.apiKey || !textToSpeak) return;
+
+  const clean = textToSpeak.replace(/[*#_`~]/g, '').trim();
+  if (!clean) return;
+
+  if (statusLabel) statusLabel.innerText = "Speaking...";
+
+  const chosenVoice = STATE.voice || "Puck";
+
   try {
-    if (currentAudio) {
-      currentAudio.pause();
-      currentAudio = null;
-    }
-
-    if (statusLabel) statusLabel.innerText = "Speaking...";
-
-    const audioUrl = `data:${mimeType};base64,${base64Data}`;
-    currentAudio = new Audio(audioUrl);
-
-    currentAudio.onended = () => {
-      if (statusLabel) statusLabel.innerText = "READY, MONDE";
-    };
-
-    currentAudio.onerror = (e) => {
-      alert("Audio playback error on phone: " + JSON.stringify(e));
-      if (statusLabel) statusLabel.innerText = "READY, MONDE";
-    };
-
-    currentAudio.play().catch(e => {
-      alert("Playback blocked by phone. Ensure Media Volume is turned up: " + e.message);
-      if (statusLabel) statusLabel.innerText = "READY, MONDE";
+    const ttsUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-lite-tts:generateContent?key=${STATE.apiKey}`;
+    
+    const res = await fetch(ttsUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          role: "user",
+          parts: [{ text: clean.slice(0, 300) }]
+        }],
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName: chosenVoice
+              }
+            }
+          }
+        }
+      })
     });
 
-  } catch(err) {
-    alert("Audio decode error: " + err.message);
+    const d = await res.json();
+
+    if (d.candidates && d.candidates[0].content && d.candidates[0].content.parts) {
+      for (const part of d.candidates[0].content.parts) {
+        if (part.inlineData && part.inlineData.data) {
+          const base64Data = part.inlineData.data;
+          const mimeType = part.inlineData.mimeType || "audio/wav";
+
+          if (currentAudio) {
+            try { currentAudio.pause(); } catch(e){}
+            currentAudio = null;
+          }
+
+          currentAudio = new Audio(`data:${mimeType};base64,${base64Data}`);
+          currentAudio.onended = () => {
+            if (statusLabel) statusLabel.innerText = "READY, MONDE";
+          };
+          await currentAudio.play();
+          return;
+        }
+      }
+    }
+
+    if (statusLabel) statusLabel.innerText = "READY, MONDE";
+
+  } catch (err) {
+    console.log("TTS Error:", err);
+    if (statusLabel) statusLabel.innerText = "READY, MONDE";
   }
 }
 
 // Test Voice Button
 if (btnTestVoice) {
-  btnTestVoice.onclick = () => {
-    // 1. Play immediate chime directly from device hardware
+  btnTestVoice.onclick = async () => {
     playSpeakerChime();
-    
-    // 2. Trigger native Gemini voice test
-    handleQuery("Introduce yourself in one sentence with your name Monde.");
+    const voice = selectVoice ? selectVoice.value : "Puck";
+    const displayName = voice === "Puck" ? "Monde" : (voice === "Charon" ? "Alex" : "Emma");
+    await speak("Hello Monde! I am your AI assistant speaking with the " + displayName + " voice.");
   };
 }
 
@@ -226,7 +256,7 @@ function toggleMic() {
 if (micBtn) micBtn.onclick = toggleMic;
 if (orb) orb.onclick = toggleMic;
 
-// --- DUAL-MODALITY QUERY: GETS TEXT AND NATIVE AUDIO DIRECT FROM GEMINI ---
+// --- FAST AI QUERY (GEMINI 3.5 FLASH LITE - NO DEMAND SPIKES) ---
 async function handleQuery(cmd) {
   if (!STATE.apiKey) {
     appendMsg('MONDE AI', 'Please tap Settings and enter your API key.');
@@ -238,66 +268,35 @@ async function handleQuery(cmd) {
   const now = new Date();
   const liveDate = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
-  const chosenVoice = STATE.voice || "Puck";
-
-  const requestBody = {
-    contents: [{ parts: [{ text: cmd }] }],
-    systemInstruction: {
-      parts: [{ text: `You are Monde AI, speaking with Monde Dubasi. Today's live date is ${liveDate}. Speak directly and concisely in 1 or 2 natural sentences.` }]
-    },
-    generationConfig: {
-      responseModalities: ["AUDIO", "TEXT"],
-      speechConfig: {
-        voiceConfig: {
-          prebuiltVoiceConfig: {
-            voiceName: chosenVoice
-          }
-        }
-      }
-    }
-  };
+  const systemPrompt = `You are Monde AI, a personal companion created for Monde Dubasi. 
+Today's actual real-time date is ${liveDate}, and the current year is ${now.getFullYear()}.
+Always speak in concise, natural, fluent English (1 to 2 sentences max). Do not use bullet points or markdown symbols because your response is spoken aloud.`;
 
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${STATE.apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${STATE.apiKey}`;
     
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody)
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: cmd }] }],
+        systemInstruction: { parts: [{ text: systemPrompt }] }
+      })
     });
 
     const d = await res.json();
-    
-    if (d.candidates && d.candidates[0].content && d.candidates[0].content.parts) {
-      let replyText = "";
-      let audioBase64 = null;
-      let audioMime = "audio/wav";
-
-      for (const part of d.candidates[0].content.parts) {
-        if (part.text) {
-          replyText += part.text;
-        }
-        if (part.inlineData) {
-          audioBase64 = part.inlineData.data;
-          audioMime = part.inlineData.mimeType || "audio/wav";
-        }
-      }
-
-      if (replyText) appendMsg('MONDE AI', replyText);
+    if (d.candidates && d.candidates[0].content && d.candidates[0].content.parts[0].text) {
+      const reply = d.candidates[0].content.parts[0].text;
+      appendMsg('MONDE AI', reply);
       
-      // Play voice output directly from Google's response
-      if (audioBase64) {
-        playBase64Audio(audioBase64, audioMime);
-      } else {
-        if (statusLabel) statusLabel.innerText = "READY, MONDE";
-      }
-
+      // Speak the reply out loud
+      speak(reply);
     } else if (d.error) {
       appendMsg('MONDE AI', 'API Error: ' + d.error.message);
       if (statusLabel) statusLabel.innerText = "READY, MONDE";
     }
   } catch(e) {
-    appendMsg('MONDE AI', 'Connection error: ' + e.message);
+    appendMsg('MONDE AI', 'Network error: ' + e.message);
     if (statusLabel) statusLabel.innerText = "READY, MONDE";
   }
 }
