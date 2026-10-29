@@ -1,6 +1,6 @@
 const STATE = {
   apiKey: localStorage.getItem('MONDE_KEY') || '',
-  voice: localStorage.getItem('MONDE_VOICE') || 'Brian',
+  voice: localStorage.getItem('MONDE_VOICE') || 'Puck',
   isListening: false,
   isProcessing: false,
   memories: JSON.parse(localStorage.getItem('MONDE_MEMORIES')) || []
@@ -42,7 +42,8 @@ document.getElementById('btn-save-settings').onclick = () => {
   localStorage.setItem('MONDE_KEY', STATE.apiKey);
   localStorage.setItem('MONDE_VOICE', STATE.voice);
   modalSettings.classList.add('hidden');
-  speak("Voice settings updated. I am ready, Monde.");
+  appendMsg('MONDE AI', 'Settings saved! Testing speech...');
+  handleQuery("Say hello to Monde and confirm your voice is ready.");
 };
 
 // Memory Modal
@@ -78,75 +79,73 @@ function appendMsg(sender, text) {
   chat.scrollTop = chat.scrollHeight;
 }
 
-// Web Audio Engine (Bypasses Android sound blocks)
-const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-let audioCtx = null;
+// --- HARDWARE SPEAKER CHIME (PROVES PHONE SPEAKER IS AUDIBLE) ---
+function playSpeakerChime() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
 
-function getAudioContext() {
-  if (!audioCtx && AudioContextClass) {
-    audioCtx = new AudioContextClass();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5 note
+    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.15); // A5 note
+
+    gain.gain.setValueAtTime(0.4, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.35);
+  } catch (e) {
+    console.log("Speaker chime error:", e);
   }
-  if (audioCtx && audioCtx.state === 'suspended') {
-    audioCtx.resume();
-  }
-  return audioCtx;
 }
 
-let activeAudioSource = null;
+// --- AUDIO PLAYER (PLAYS DIRECT BASE64 AUDIO WITH ZERO NETWORK CALLS) ---
+let currentAudio = null;
 
-async function speak(t) {
-  const clean = t.replace(/[*#_`~]/g, '').trim();
-  if (!clean) return;
-
-  if (statusLabel) statusLabel.innerText = "Speaking...";
-
-  const chosenVoice = STATE.voice || "Brian";
-  const ttsUrl = `https://api.streamelements.com/kappa/v2/speech?voice=${chosenVoice}&text=${encodeURIComponent(clean.slice(0, 300))}`;
-
+function playBase64Audio(base64Data, mimeType = 'audio/wav') {
   try {
-    const ctx = getAudioContext();
-    const response = await fetch(ttsUrl);
-    if (!response.ok) throw new Error("HTTP " + response.status);
-
-    const arrayBuffer = await response.arrayBuffer();
-    const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-
-    if (activeAudioSource) {
-      try { activeAudioSource.stop(); } catch(e){}
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio = null;
     }
 
-    const source = ctx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(ctx.destination);
+    if (statusLabel) statusLabel.innerText = "Speaking...";
 
-    source.onended = () => {
+    const audioUrl = `data:${mimeType};base64,${base64Data}`;
+    currentAudio = new Audio(audioUrl);
+
+    currentAudio.onended = () => {
       if (statusLabel) statusLabel.innerText = "READY, MONDE";
     };
 
-    source.start(0);
-    activeAudioSource = source;
-
-  } catch (err) {
-    console.log("WebAudio failed, using HTML5 fallback:", err);
-    try {
-      const fallbackAudio = new Audio(ttsUrl);
-      fallbackAudio.onended = () => {
-        if (statusLabel) statusLabel.innerText = "READY, MONDE";
-      };
-      await fallbackAudio.play();
-    } catch(fallbackErr) {
+    currentAudio.onerror = (e) => {
+      alert("Audio playback error on phone: " + JSON.stringify(e));
       if (statusLabel) statusLabel.innerText = "READY, MONDE";
-    }
+    };
+
+    currentAudio.play().catch(e => {
+      alert("Playback blocked by phone. Ensure Media Volume is turned up: " + e.message);
+      if (statusLabel) statusLabel.innerText = "READY, MONDE";
+    });
+
+  } catch(err) {
+    alert("Audio decode error: " + err.message);
   }
 }
 
 // Test Voice Button
 if (btnTestVoice) {
   btnTestVoice.onclick = () => {
-    getAudioContext();
-    const voice = selectVoice ? selectVoice.value : "Brian";
-    const displayName = voice === "Brian" ? "Monde" : (voice === "Matthew" ? "Alex" : "Emma");
-    speak("Hello! I am your AI assistant speaking with the " + displayName + " voice.");
+    // 1. Play immediate chime directly from device hardware
+    playSpeakerChime();
+    
+    // 2. Trigger native Gemini voice test
+    handleQuery("Introduce yourself in one sentence with your name Monde.");
   };
 }
 
@@ -155,8 +154,6 @@ function submitTextMessage() {
   if (!textInput) return;
   const msg = textInput.value.trim();
   if (!msg) return;
-
-  getAudioContext(); // Unlocks sound channel on phone
 
   textInput.value = '';
   appendMsg('Monde', msg);
@@ -212,11 +209,9 @@ if (SpeechRecognition) {
 }
 
 function toggleMic() {
-  getAudioContext();
-
   if (!rec) return;
-  if (activeAudioSource) {
-    try { activeAudioSource.stop(); } catch(e){}
+  if (currentAudio) {
+    try { currentAudio.pause(); } catch(e){}
   }
 
   if (STATE.isListening) {
@@ -231,11 +226,10 @@ function toggleMic() {
 if (micBtn) micBtn.onclick = toggleMic;
 if (orb) orb.onclick = toggleMic;
 
-// AI Query (Gemini 3.5 Flash Lite)
+// --- DUAL-MODALITY QUERY: GETS TEXT AND NATIVE AUDIO DIRECT FROM GEMINI ---
 async function handleQuery(cmd) {
   if (!STATE.apiKey) {
     appendMsg('MONDE AI', 'Please tap Settings and enter your API key.');
-    speak("Please tap Settings and enter your API key.");
     return;
   }
 
@@ -244,31 +238,66 @@ async function handleQuery(cmd) {
   const now = new Date();
   const liveDate = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
-  const systemPrompt = `You are Monde AI, a fast personal companion created for Monde Dubasi. 
-Today's actual real-time date is ${liveDate}, and the current year is ${now.getFullYear()}.
-Always speak in concise, natural, fluent English (1 to 2 sentences max). Do not use bullet points or markdown symbols because your response is spoken aloud.`;
+  const chosenVoice = STATE.voice || "Puck";
+
+  const requestBody = {
+    contents: [{ parts: [{ text: cmd }] }],
+    systemInstruction: {
+      parts: [{ text: `You are Monde AI, speaking with Monde Dubasi. Today's live date is ${liveDate}. Speak directly and concisely in 1 or 2 natural sentences.` }]
+    },
+    generationConfig: {
+      responseModalities: ["AUDIO", "TEXT"],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: {
+            voiceName: chosenVoice
+          }
+        }
+      }
+    }
+  };
 
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${STATE.apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${STATE.apiKey}`;
     
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: cmd }] }],
-        systemInstruction: { parts: [{ text: systemPrompt }] }
-      })
+      body: JSON.stringify(requestBody)
     });
 
     const d = await res.json();
-    if (d.candidates && d.candidates[0].content && d.candidates[0].content.parts[0].text) {
-      const reply = d.candidates[0].content.parts[0].text;
-      appendMsg('MONDE AI', reply);
-      speak(reply);
-    } else {
-      appendMsg('MONDE AI', 'Servers busy, please try again.');
+    
+    if (d.candidates && d.candidates[0].content && d.candidates[0].content.parts) {
+      let replyText = "";
+      let audioBase64 = null;
+      let audioMime = "audio/wav";
+
+      for (const part of d.candidates[0].content.parts) {
+        if (part.text) {
+          replyText += part.text;
+        }
+        if (part.inlineData) {
+          audioBase64 = part.inlineData.data;
+          audioMime = part.inlineData.mimeType || "audio/wav";
+        }
+      }
+
+      if (replyText) appendMsg('MONDE AI', replyText);
+      
+      // Play voice output directly from Google's response
+      if (audioBase64) {
+        playBase64Audio(audioBase64, audioMime);
+      } else {
+        if (statusLabel) statusLabel.innerText = "READY, MONDE";
+      }
+
+    } else if (d.error) {
+      appendMsg('MONDE AI', 'API Error: ' + d.error.message);
+      if (statusLabel) statusLabel.innerText = "READY, MONDE";
     }
   } catch(e) {
-    appendMsg('MONDE AI', 'Network error.');
+    appendMsg('MONDE AI', 'Connection error: ' + e.message);
+    if (statusLabel) statusLabel.innerText = "READY, MONDE";
   }
 }
