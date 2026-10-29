@@ -1,5 +1,6 @@
 const STATE = {
   apiKey: localStorage.getItem('MONDE_KEY') || '',
+  voice: localStorage.getItem('MONDE_VOICE') || 'Matthew',
   isListening: false,
   isProcessing: false,
   memories: JSON.parse(localStorage.getItem('MONDE_MEMORIES')) || []
@@ -13,19 +14,21 @@ const micBtn = document.getElementById('btn-mic-toggle');
 const modalSettings = document.getElementById('modal-settings');
 const modalMemory = document.getElementById('modal-memory');
 const inputKey = document.getElementById('input-api-key');
+const selectVoice = document.getElementById('select-voice');
 
 const textForm = document.getElementById('text-form');
 const textInput = document.getElementById('input-text-msg');
 const textSendBtn = document.getElementById('btn-text-send');
+const audioPlayer = document.getElementById('global-audio-player');
 
-if (inputKey && STATE.apiKey) {
-  inputKey.value = STATE.apiKey;
-}
+if (inputKey && STATE.apiKey) inputKey.value = STATE.apiKey;
+if (selectVoice && STATE.voice) selectVoice.value = STATE.voice;
 
 // Settings Modal
 document.getElementById('btn-settings').onclick = () => {
   modalSettings.classList.toggle('hidden');
   if (inputKey) inputKey.value = STATE.apiKey;
+  if (selectVoice) selectVoice.value = STATE.voice;
 };
 
 const btnCloseSettings = document.getElementById('btn-close-settings');
@@ -35,10 +38,12 @@ if (btnCloseSettings) {
 
 document.getElementById('btn-save-settings').onclick = () => {
   STATE.apiKey = inputKey.value.trim();
+  STATE.voice = selectVoice.value;
   localStorage.setItem('MONDE_KEY', STATE.apiKey);
+  localStorage.setItem('MONDE_VOICE', STATE.voice);
   modalSettings.classList.add('hidden');
-  appendMsg('MONDE AI', 'API Key saved successfully!');
-  speak("API key saved. I am ready, Monde.");
+  
+  unlockAndSpeak("Settings saved. I am ready, Monde.");
 };
 
 // Memory Modal
@@ -51,7 +56,7 @@ if (btnCloseMemory && modalMemory) {
   btnCloseMemory.onclick = () => modalMemory.classList.add('hidden');
 }
 
-// Big, Clean Chat Bubble Renderer
+// Chat UI Helper
 function appendMsg(sender, text) {
   if (!chat) return;
   const d = document.createElement('div');
@@ -74,31 +79,44 @@ function appendMsg(sender, text) {
   chat.scrollTop = chat.scrollHeight;
 }
 
-// Fluent Male Voice Engine (Amazon Polly Matthew)
-let currentAudio = null;
+// --- UNLOCK AND PLAY AUDIO ENGINE ---
+// Android blocks audio unless pre-activated during a click
+function unlockAudioContext() {
+  if (audioPlayer) {
+    audioPlayer.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+    audioPlayer.play().catch(() => {});
+  }
+}
 
 function speak(t) {
-  if (currentAudio) {
-    try { currentAudio.pause(); } catch(e){}
-    currentAudio = null;
-  }
-
   const clean = t.replace(/[*#_`~]/g, '').trim();
-  if (!clean) return;
+  if (!clean || !audioPlayer) return;
 
   if (statusLabel) statusLabel.innerText = "Speaking...";
 
-  const ttsUrl = `https://api.streamelements.com/kappa/v2/speech?voice=Matthew&text=${encodeURIComponent(clean.slice(0, 300))}`;
-  currentAudio = new Audio(ttsUrl);
+  const chosenVoice = STATE.voice || "Matthew";
+  const ttsUrl = `https://api.streamelements.com/kappa/v2/speech?voice=${chosenVoice}&text=${encodeURIComponent(clean.slice(0, 300))}`;
 
-  currentAudio.onended = () => {
+  audioPlayer.src = ttsUrl;
+  audioPlayer.load();
+
+  audioPlayer.onended = () => {
     if (statusLabel) statusLabel.innerText = "READY, MONDE";
   };
-  currentAudio.onerror = () => {
+  audioPlayer.onerror = (e) => {
+    console.log("Audio stream failed:", e);
     if (statusLabel) statusLabel.innerText = "READY, MONDE";
   };
 
-  currentAudio.play().catch(e => console.log('Audio error:', e));
+  audioPlayer.play().catch(e => {
+    console.log("Audio playback blocked:", e);
+    if (statusLabel) statusLabel.innerText = "READY, MONDE";
+  });
+}
+
+function unlockAndSpeak(t) {
+  unlockAudioContext();
+  setTimeout(() => speak(t), 200);
 }
 
 // Text Input Handling
@@ -106,6 +124,9 @@ function submitTextMessage() {
   if (!textInput) return;
   const msg = textInput.value.trim();
   if (!msg) return;
+
+  // Crucial: Unlock Android audio channel on the tap event!
+  unlockAudioContext();
 
   textInput.value = '';
   appendMsg('Monde', msg);
@@ -161,8 +182,11 @@ if (SpeechRecognition) {
 }
 
 function toggleMic() {
+  // Unlock audio channel when user interacts with mic
+  unlockAudioContext();
+
   if (!rec) return;
-  if (currentAudio) currentAudio.pause();
+  if (audioPlayer) audioPlayer.pause();
 
   if (STATE.isListening) {
     rec.stop();
