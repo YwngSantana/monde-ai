@@ -1,6 +1,6 @@
 const STATE = {
   apiKey: localStorage.getItem('MONDE_KEY') || '',
-  voice: localStorage.getItem('MONDE_VOICE') || 'Matthew',
+  voice: localStorage.getItem('MONDE_VOICE') || 'Brian',
   isListening: false,
   isProcessing: false,
   memories: JSON.parse(localStorage.getItem('MONDE_MEMORIES')) || []
@@ -15,11 +15,11 @@ const modalSettings = document.getElementById('modal-settings');
 const modalMemory = document.getElementById('modal-memory');
 const inputKey = document.getElementById('input-api-key');
 const selectVoice = document.getElementById('select-voice');
+const btnTestVoice = document.getElementById('btn-test-voice');
 
 const textForm = document.getElementById('text-form');
 const textInput = document.getElementById('input-text-msg');
 const textSendBtn = document.getElementById('btn-text-send');
-const audioPlayer = document.getElementById('global-audio-player');
 
 if (inputKey && STATE.apiKey) inputKey.value = STATE.apiKey;
 if (selectVoice && STATE.voice) selectVoice.value = STATE.voice;
@@ -42,8 +42,7 @@ document.getElementById('btn-save-settings').onclick = () => {
   localStorage.setItem('MONDE_KEY', STATE.apiKey);
   localStorage.setItem('MONDE_VOICE', STATE.voice);
   modalSettings.classList.add('hidden');
-  
-  unlockAndSpeak("Settings saved. I am ready, Monde.");
+  speak("Voice settings updated. I am ready, Monde.");
 };
 
 // Memory Modal
@@ -56,7 +55,7 @@ if (btnCloseMemory && modalMemory) {
   btnCloseMemory.onclick = () => modalMemory.classList.add('hidden');
 }
 
-// Chat UI Helper
+// Big, Clean Chat Bubbles
 function appendMsg(sender, text) {
   if (!chat) return;
   const d = document.createElement('div');
@@ -79,44 +78,76 @@ function appendMsg(sender, text) {
   chat.scrollTop = chat.scrollHeight;
 }
 
-// --- UNLOCK AND PLAY AUDIO ENGINE ---
-// Android blocks audio unless pre-activated during a click
-function unlockAudioContext() {
-  if (audioPlayer) {
-    audioPlayer.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
-    audioPlayer.play().catch(() => {});
+// Web Audio Engine (Bypasses Android sound blocks)
+const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+let audioCtx = null;
+
+function getAudioContext() {
+  if (!audioCtx && AudioContextClass) {
+    audioCtx = new AudioContextClass();
   }
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+  return audioCtx;
 }
 
-function speak(t) {
+let activeAudioSource = null;
+
+async function speak(t) {
   const clean = t.replace(/[*#_`~]/g, '').trim();
-  if (!clean || !audioPlayer) return;
+  if (!clean) return;
 
   if (statusLabel) statusLabel.innerText = "Speaking...";
 
-  const chosenVoice = STATE.voice || "Matthew";
+  const chosenVoice = STATE.voice || "Brian";
   const ttsUrl = `https://api.streamelements.com/kappa/v2/speech?voice=${chosenVoice}&text=${encodeURIComponent(clean.slice(0, 300))}`;
 
-  audioPlayer.src = ttsUrl;
-  audioPlayer.load();
+  try {
+    const ctx = getAudioContext();
+    const response = await fetch(ttsUrl);
+    if (!response.ok) throw new Error("HTTP " + response.status);
 
-  audioPlayer.onended = () => {
-    if (statusLabel) statusLabel.innerText = "READY, MONDE";
-  };
-  audioPlayer.onerror = (e) => {
-    console.log("Audio stream failed:", e);
-    if (statusLabel) statusLabel.innerText = "READY, MONDE";
-  };
+    const arrayBuffer = await response.arrayBuffer();
+    const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
 
-  audioPlayer.play().catch(e => {
-    console.log("Audio playback blocked:", e);
-    if (statusLabel) statusLabel.innerText = "READY, MONDE";
-  });
+    if (activeAudioSource) {
+      try { activeAudioSource.stop(); } catch(e){}
+    }
+
+    const source = ctx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(ctx.destination);
+
+    source.onended = () => {
+      if (statusLabel) statusLabel.innerText = "READY, MONDE";
+    };
+
+    source.start(0);
+    activeAudioSource = source;
+
+  } catch (err) {
+    console.log("WebAudio failed, using HTML5 fallback:", err);
+    try {
+      const fallbackAudio = new Audio(ttsUrl);
+      fallbackAudio.onended = () => {
+        if (statusLabel) statusLabel.innerText = "READY, MONDE";
+      };
+      await fallbackAudio.play();
+    } catch(fallbackErr) {
+      if (statusLabel) statusLabel.innerText = "READY, MONDE";
+    }
+  }
 }
 
-function unlockAndSpeak(t) {
-  unlockAudioContext();
-  setTimeout(() => speak(t), 200);
+// Test Voice Button
+if (btnTestVoice) {
+  btnTestVoice.onclick = () => {
+    getAudioContext();
+    const voice = selectVoice ? selectVoice.value : "Brian";
+    const displayName = voice === "Brian" ? "Monde" : (voice === "Matthew" ? "Alex" : "Emma");
+    speak("Hello! I am your AI assistant speaking with the " + displayName + " voice.");
+  };
 }
 
 // Text Input Handling
@@ -125,8 +156,7 @@ function submitTextMessage() {
   const msg = textInput.value.trim();
   if (!msg) return;
 
-  // Crucial: Unlock Android audio channel on the tap event!
-  unlockAudioContext();
+  getAudioContext(); // Unlocks sound channel on phone
 
   textInput.value = '';
   appendMsg('Monde', msg);
@@ -182,11 +212,12 @@ if (SpeechRecognition) {
 }
 
 function toggleMic() {
-  // Unlock audio channel when user interacts with mic
-  unlockAudioContext();
+  getAudioContext();
 
   if (!rec) return;
-  if (audioPlayer) audioPlayer.pause();
+  if (activeAudioSource) {
+    try { activeAudioSource.stop(); } catch(e){}
+  }
 
   if (STATE.isListening) {
     rec.stop();
@@ -200,7 +231,7 @@ function toggleMic() {
 if (micBtn) micBtn.onclick = toggleMic;
 if (orb) orb.onclick = toggleMic;
 
-// AI Query
+// AI Query (Gemini 3.5 Flash Lite)
 async function handleQuery(cmd) {
   if (!STATE.apiKey) {
     appendMsg('MONDE AI', 'Please tap Settings and enter your API key.');
