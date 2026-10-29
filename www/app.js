@@ -3,9 +3,8 @@ const STATE = {
   voice: localStorage.getItem('MONDE_VOICE') || 'Puck',
   isListening: false,
   isProcessing: false,
-  // Context history memory
-  history: JSON.parse(localStorage.getItem('MONDE_CHAT_HISTORY')) || [],
-  memories: JSON.parse(localStorage.getItem('MONDE_MEMORIES')) || []
+  // Simple chat memory log
+  history: JSON.parse(localStorage.getItem('MONDE_SIMPLE_HISTORY')) || []
 };
 
 const orb = document.getElementById('orb-core');
@@ -32,25 +31,23 @@ window.onload = () => {
   if (STATE.history.length > 0) {
     chat.innerHTML = '';
     STATE.history.forEach(item => {
-      const sender = item.role === 'user' ? 'Monde' : 'MONDE AI';
-      const text = item.parts[0].text;
-      renderBubble(sender, text);
+      renderBubble(item.sender, item.text);
     });
   }
 };
 
-// + New Chat Handler: Starts a fresh conversation topic
+// + New Chat Handler
 if (btnNewChat) {
   btnNewChat.onclick = () => {
     STATE.history = [];
-    localStorage.removeItem('MONDE_CHAT_HISTORY');
+    localStorage.removeItem('MONDE_SIMPLE_HISTORY');
     chat.innerHTML = `
       <div class="p-3.5 bg-slate-800/90 rounded-2xl text-slate-100 border border-slate-700/60 mr-6 shadow-sm">
         <div class="text-[11px] font-bold text-cyan-400 mb-1 uppercase tracking-wider">MONDE AI</div>
         <div class="text-base leading-relaxed">Fresh conversation started, Monde. What's on your mind?</div>
       </div>
     `;
-    handleQuery("Say hello to Monde and let him know you are ready for a new topic.");
+    handleQuery("Start a fresh conversation and greet Monde.");
   };
 }
 
@@ -73,7 +70,7 @@ document.getElementById('btn-save-settings').onclick = () => {
   localStorage.setItem('MONDE_VOICE', STATE.voice);
   modalSettings.classList.add('hidden');
   appendMsg('MONDE AI', 'Settings saved! Testing speech...');
-  handleQuery("Say hello to Monde and confirm your voice is ready.");
+  handleQuery("Introduce yourself in one sentence with your name Monde.");
 };
 
 // Memory Modal
@@ -91,7 +88,7 @@ function renderBubble(sender, text) {
   if (!chat) return;
   const d = document.createElement('div');
   
-  if (sender === 'Monde') {
+  if (sender === 'Monde' || sender === 'You') {
     d.className = 'p-3.5 bg-cyan-950/80 rounded-2xl text-cyan-100 border border-cyan-700/60 self-end ml-8 shadow-sm max-w-[85%]';
     d.innerHTML = `
       <div class="text-[11px] font-bold text-cyan-400 mb-1 uppercase tracking-wider text-right">You</div>
@@ -113,7 +110,7 @@ function appendMsg(sender, text) {
   renderBubble(sender, text);
 }
 
-// Hardware Speaker Test Chime
+// Speaker Test Chime
 function playSpeakerChime() {
   try {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -136,7 +133,7 @@ function playSpeakerChime() {
   } catch (e) {}
 }
 
-// --- THE WORKING 21:23 BASE64 AUDIO ENGINE ---
+// Direct Base64 Audio Playback (From 21:23)
 let currentAudio = null;
 
 function playBase64Audio(base64Data, mimeType = 'audio/wav') {
@@ -180,7 +177,7 @@ function submitTextMessage() {
   if (!msg) return;
 
   textInput.value = '';
-  appendMsg('Monde', msg);
+  appendMsg('You', msg);
   handleQuery(msg);
 }
 
@@ -215,7 +212,7 @@ if (SpeechRecognition) {
   rec.onresult = (e) => {
     const text = e.results[0][0].transcript;
     if (text && text.trim().length > 0) {
-      appendMsg('Monde', text);
+      appendMsg('You', text);
       handleQuery(text);
     }
   };
@@ -250,7 +247,7 @@ function toggleMic() {
 if (micBtn) micBtn.onclick = toggleMic;
 if (orb) orb.onclick = toggleMic;
 
-// --- DUAL-MODALITY QUERY: SENDS CHAT HISTORY & RECEIVES AUDIO DIRECTLY ---
+// --- FAST AI QUERY: SINGLE-TURN AUDIO ENGINE WITH CONTEXT MEMORY ---
 async function handleQuery(cmd) {
   if (!STATE.apiKey) {
     appendMsg('MONDE AI', 'Please tap Settings and enter your API key.');
@@ -263,27 +260,26 @@ async function handleQuery(cmd) {
   const liveDate = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const chosenVoice = STATE.voice || "Puck";
 
-  const systemPrompt = `You are Monde AI, a personal companion created for Monde Dubasi. 
-Today's actual real-time date is ${liveDate}, and the current year is ${now.getFullYear()}.
-You are having an active, natural dialogue with Monde. 
-Pay close attention to what was said previously in this conversation and build upon it smoothly.
-Always speak in concise, natural, fluent English (1 to 2 sentences max). Do not use bullet points or markdown symbols because your response is spoken aloud.`;
-
-  // 1. Add user message to conversation history
-  STATE.history.push({
-    role: "user",
-    parts: [{ text: cmd }]
-  });
-
-  // Keep last 14 turns so context stays smooth
-  if (STATE.history.length > 14) {
-    STATE.history = STATE.history.slice(-14);
+  // Build the recent conversation history into context
+  const recentHistory = STATE.history.slice(-8); // Last 8 exchanges
+  let conversationContext = "";
+  if (recentHistory.length > 0) {
+    conversationContext = "Recent dialogue:\n" + recentHistory.map(h => `${h.sender}: ${h.text}`).join("\n") + "\n\n";
   }
 
+  const promptWithContext = `${conversationContext}Monde: ${cmd}`;
+
   const requestBody = {
-    contents: STATE.history, // Full conversation stream
+    contents: [{
+      parts: [{ text: promptWithContext }]
+    }],
     systemInstruction: {
-      parts: [{ text: systemPrompt }]
+      parts: [{
+        text: `You are Monde AI, a personal companion created for Monde Dubasi.
+Today's actual real-time date is ${liveDate}, and the current year is ${now.getFullYear()}.
+You are actively chatting with Monde. Use the recent dialogue to maintain natural conversation context.
+Always speak in concise, natural, fluent English (1 to 2 sentences max). Do not use bullet points or markdown symbols because your response is spoken aloud.`
+      }]
     },
     generationConfig: {
       responseModalities: ["AUDIO", "TEXT"],
@@ -324,16 +320,16 @@ Always speak in concise, natural, fluent English (1 to 2 sentences max). Do not 
       }
 
       if (replyText) {
-        // 2. Add AI reply to history so it remembers for the next turn
-        STATE.history.push({
-          role: "model",
-          parts: [{ text: replyText }]
-        });
-        localStorage.setItem('MONDE_CHAT_HISTORY', JSON.stringify(STATE.history));
+        // Save user message and reply to simple history
+        STATE.history.push({ sender: 'Monde', text: cmd });
+        STATE.history.push({ sender: 'MONDE AI', text: replyText });
+        if (STATE.history.length > 20) STATE.history = STATE.history.slice(-20);
+        localStorage.setItem('MONDE_SIMPLE_HISTORY', JSON.stringify(STATE.history));
+
         appendMsg('MONDE AI', replyText);
       }
       
-      // 3. Play the voice directly from Google's response
+      // Play the voice out loud
       if (audioBase64) {
         playBase64Audio(audioBase64, audioMime);
       } else {
