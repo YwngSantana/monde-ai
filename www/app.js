@@ -14,6 +14,10 @@ const modalSettings = document.getElementById('modal-settings');
 const modalMemory = document.getElementById('modal-memory');
 const inputKey = document.getElementById('input-api-key');
 
+const textForm = document.getElementById('text-form');
+const textInput = document.getElementById('input-text-msg');
+const textSendBtn = document.getElementById('btn-text-send');
+
 if (inputKey && STATE.apiKey) {
   inputKey.value = STATE.apiKey;
 }
@@ -33,6 +37,7 @@ document.getElementById('btn-save-settings').onclick = () => {
   STATE.apiKey = inputKey.value.trim();
   localStorage.setItem('MONDE_KEY', STATE.apiKey);
   modalSettings.classList.add('hidden');
+  appendMsg('MONDE AI', 'API Key saved successfully!');
   speak("API key saved. I am ready, Monde.");
 };
 
@@ -41,52 +46,86 @@ const btnMemory = document.getElementById('btn-memory');
 if (btnMemory && modalMemory) {
   btnMemory.onclick = () => modalMemory.classList.toggle('hidden');
 }
+const btnCloseMemory = document.getElementById('btn-close-memory');
+if (btnCloseMemory && modalMemory) {
+  btnCloseMemory.onclick = () => modalMemory.classList.add('hidden');
+}
 
-// Chat UI Helper
+// Big, Clean Chat Bubble Renderer
 function appendMsg(sender, text) {
   if (!chat) return;
   const d = document.createElement('div');
-  d.className = sender === 'Monde' ? 'p-2 bg-cyan-950/60 rounded mb-2 text-cyan-200' : 'p-2 bg-slate-800 rounded mb-2 text-white';
-  d.innerHTML = `<strong>${sender}:</strong> ${text}`;
+  
+  if (sender === 'Monde') {
+    d.className = 'p-3.5 bg-cyan-950/80 rounded-2xl text-cyan-100 border border-cyan-700/60 self-end ml-8 shadow-sm max-w-[85%]';
+    d.innerHTML = `
+      <div class="text-[11px] font-bold text-cyan-400 mb-1 uppercase tracking-wider text-right">You</div>
+      <div class="text-base font-medium leading-relaxed">${text}</div>
+    `;
+  } else {
+    d.className = 'p-3.5 bg-slate-800/95 rounded-2xl text-slate-100 border border-slate-700/70 mr-8 shadow-sm max-w-[90%]';
+    d.innerHTML = `
+      <div class="text-[11px] font-bold text-indigo-400 mb-1 uppercase tracking-wider">MONDE AI</div>
+      <div class="text-base leading-relaxed">${text}</div>
+    `;
+  }
+
   chat.appendChild(d);
   chat.scrollTop = chat.scrollHeight;
 }
 
-// --- GUARANTEED ANDROID AUDIO ENGINE (FLUENT MALE VOICE) ---
+// Fluent Male Voice Engine (Amazon Polly Matthew)
 let currentAudio = null;
 
 function speak(t) {
   if (currentAudio) {
-    currentAudio.pause();
+    try { currentAudio.pause(); } catch(e){}
     currentAudio = null;
   }
 
-  // Strip markdown (*, #) and limit sentence length for instant speech
   const clean = t.replace(/[*#_`~]/g, '').trim();
   if (!clean) return;
 
   if (statusLabel) statusLabel.innerText = "Speaking...";
 
-  // HTML5 Audio stream - works 100% on Android WebView
-  const url = `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=en&q=${encodeURIComponent(clean.slice(0, 200))}`;
-  currentAudio = new Audio(url);
-  
-  // Lower pitch to create a natural, deep male voice
-  currentAudio.preservesPitch = false;
-  currentAudio.playbackRate = 0.88; 
+  const ttsUrl = `https://api.streamelements.com/kappa/v2/speech?voice=Matthew&text=${encodeURIComponent(clean.slice(0, 300))}`;
+  currentAudio = new Audio(ttsUrl);
 
   currentAudio.onended = () => {
-    if (statusLabel) statusLabel.innerText = "Ready, Monde.";
+    if (statusLabel) statusLabel.innerText = "READY, MONDE";
   };
-
   currentAudio.onerror = () => {
-    if (statusLabel) statusLabel.innerText = "Ready, Monde.";
+    if (statusLabel) statusLabel.innerText = "READY, MONDE";
   };
 
-  currentAudio.play().catch(e => console.log('Audio playback error:', e));
+  currentAudio.play().catch(e => console.log('Audio error:', e));
 }
 
-// --- INSTANT SPEECH RECOGNITION ---
+// Text Input Handling
+function submitTextMessage() {
+  if (!textInput) return;
+  const msg = textInput.value.trim();
+  if (!msg) return;
+
+  textInput.value = '';
+  appendMsg('Monde', msg);
+  handleQuery(msg);
+}
+
+if (textForm) {
+  textForm.onsubmit = (e) => {
+    e.preventDefault();
+    submitTextMessage();
+  };
+}
+if (textSendBtn) {
+  textSendBtn.onclick = (e) => {
+    e.preventDefault();
+    submitTextMessage();
+  };
+}
+
+// Speech Recognition
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec;
 
@@ -97,7 +136,7 @@ if (SpeechRecognition) {
 
   rec.onstart = () => {
     STATE.isListening = true;
-    if (statusLabel) statusLabel.innerText = "Listening... (Tap button to send)";
+    if (statusLabel) statusLabel.innerText = "LISTENING... (TAP TO SEND)";
     if (micBtn) micBtn.innerText = "Tap to Send";
   };
 
@@ -111,7 +150,7 @@ if (SpeechRecognition) {
 
   rec.onerror = () => {
     STATE.isListening = false;
-    if (statusLabel) statusLabel.innerText = "Ready, Monde.";
+    if (statusLabel) statusLabel.innerText = "READY, MONDE";
     if (micBtn) micBtn.innerText = "Tap to Talk";
   };
 
@@ -121,13 +160,12 @@ if (SpeechRecognition) {
   };
 }
 
-// Tap to Talk / Tap to Stop & Send
 function toggleMic() {
   if (!rec) return;
   if (currentAudio) currentAudio.pause();
 
   if (STATE.isListening) {
-    rec.stop(); // Stops mic and sends what you said immediately
+    rec.stop();
   } else {
     try {
       rec.start();
@@ -138,7 +176,7 @@ function toggleMic() {
 if (micBtn) micBtn.onclick = toggleMic;
 if (orb) orb.onclick = toggleMic;
 
-// --- FAST AI QUERY WITH REAL-TIME DATE/YEAR INJECTION ---
+// AI Query
 async function handleQuery(cmd) {
   if (!STATE.apiKey) {
     appendMsg('MONDE AI', 'Please tap Settings and enter your API key.');
@@ -146,9 +184,8 @@ async function handleQuery(cmd) {
     return;
   }
 
-  if (statusLabel) statusLabel.innerText = "Thinking...";
+  if (statusLabel) statusLabel.innerText = "THINKING...";
 
-  // Real-time live date and time injection
   const now = new Date();
   const liveDate = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
