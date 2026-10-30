@@ -1,3 +1,4 @@
+
 const STATE = {
   apiKey: localStorage.getItem('MONDE_KEY') || '',
   voice: localStorage.getItem('MONDE_VOICE') || 'Brian',
@@ -38,6 +39,7 @@ window.onload = () => {
 // + New Chat: Resets conversation topic
 if (btnNewChat) {
   btnNewChat.onclick = () => {
+    unlockAudio();
     STATE.history = [];
     localStorage.removeItem('MONDE_CHAT_LOG');
     chat.innerHTML = `
@@ -63,6 +65,7 @@ if (btnCloseSettings) {
 }
 
 document.getElementById('btn-save-settings').onclick = () => {
+  unlockAudio();
   STATE.apiKey = inputKey.value.trim();
   STATE.voice = selectVoice.value;
   localStorage.setItem('MONDE_KEY', STATE.apiKey);
@@ -110,41 +113,71 @@ function appendMsg(sender, text) {
 }
 
 // --- THE STREAMING VOICE ENGINE (BRIAN / MATTHEW / EMMA) ---
-let currentAudio = null;
+let currentAudio = new Audio();
+let audioUnlocked = false;
+
+const silentAudio =
+  "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
+
+function unlockAudio() {
+  if (audioUnlocked) return;
+
+  currentAudio.src = silentAudio;
+  currentAudio.volume = 0;
+
+  const unlock = currentAudio.play();
+
+  if (unlock) {
+    unlock.then(() => {
+      audioUnlocked = true;
+      currentAudio.pause();
+      currentAudio.currentTime = 0;
+      currentAudio.volume = 1;
+    }).catch(e => {
+      console.log("Audio unlock failed:", e);
+    });
+  }
+}
 
 function speak(textToSpeak) {
   const clean = textToSpeak.replace(/[*#_`~]/g, '').trim();
   if (!clean) return;
 
-  if (statusLabel) statusLabel.innerText = "Speaking...";
-
-  const chosenVoice = STATE.voice || "Brian";
-  const ttsUrl = `https://api.streamelements.com/kappa/v2/speech?voice=${chosenVoice}&text=${encodeURIComponent(clean.slice(0, 300))}`;
-
-  if (currentAudio) {
-    try { currentAudio.pause(); } catch(e){}
-    currentAudio = null;
+  if (!audioUnlocked) {
+    console.log("Audio has not been unlocked yet.");
+    return;
   }
 
-  currentAudio = new Audio(ttsUrl);
+  const chosenVoice = STATE.voice || "Brian";
+
+  const ttsUrl = `https://api.streamelements.com/kappa/v2/speech?voice=${encodeURIComponent(chosenVoice)}&text=${encodeURIComponent(clean.slice(0, 300))}`;
+
+  currentAudio.pause();
+  currentAudio.src = ttsUrl;
+  currentAudio.volume = 1;
+  currentAudio.load();
+
+  if (statusLabel) statusLabel.innerText = "SPEAKING...";
 
   currentAudio.onended = () => {
     if (statusLabel) statusLabel.innerText = "READY, MONDE";
   };
 
   currentAudio.onerror = () => {
-    if (statusLabel) statusLabel.innerText = "READY, MONDE";
+    console.error("MONDE AI audio loading failed.");
+    if (statusLabel) statusLabel.innerText = "VOICE ERROR";
   };
 
   currentAudio.play().catch(e => {
     console.log("Audio play error:", e);
-    if (statusLabel) statusLabel.innerText = "READY, MONDE";
+    if (statusLabel) statusLabel.innerText = "VOICE BLOCKED";
   });
 }
 
 // Test Voice Button
 if (btnTestVoice) {
   btnTestVoice.onclick = () => {
+    unlockAudio();
     const voice = selectVoice ? selectVoice.value : "Brian";
     const displayName = voice === "Brian" ? "Monde" : (voice === "Matthew" ? "Alex" : "Emma");
     speak("Hello Monde! I am your AI assistant speaking with the " + displayName + " voice.");
@@ -154,6 +187,8 @@ if (btnTestVoice) {
 // Text Input Handling
 function submitTextMessage() {
   if (!textInput) return;
+  unlockAudio();
+
   const msg = textInput.value.trim();
   if (!msg) return;
 
@@ -211,6 +246,8 @@ if (SpeechRecognition) {
 }
 
 function toggleMic() {
+  unlockAudio();
+
   if (!rec) return;
   if (currentAudio) {
     try { currentAudio.pause(); } catch(e){}
