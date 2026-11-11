@@ -3,7 +3,6 @@ const STATE = {
   voice: localStorage.getItem('MONDE_VOICE') || 'Puck',
   isListening: false,
   isProcessing: false,
-  // Plain text conversation log
   conversation: JSON.parse(localStorage.getItem('MONDE_CHAT_HISTORY')) || []
 };
 
@@ -110,7 +109,7 @@ function appendMsg(sender, text) {
   renderBubble(sender, text);
 }
 
-// --- THE EXACT BASE64 AUDIO ENGINE FROM 21:23 ---
+// Play Base64 Audio Output
 let currentAudio = null;
 
 function playBase64Audio(base64Data, mimeType = 'audio/wav') {
@@ -224,7 +223,7 @@ function toggleMic() {
 if (micBtn) micBtn.onclick = toggleMic;
 if (orb) orb.onclick = toggleMic;
 
-// --- FAST AI QUERY: 21:23 DUAL-MODALITY (TEXT + VOICE) WITH MEMORY ---
+// --- DUAL-MODALITY QUERY: GEMINI 3.8 FLASH ---
 async function handleQuery(cmd) {
   if (!STATE.apiKey) {
     appendMsg('MONDE AI', 'Please tap Settings and enter your API key.');
@@ -237,28 +236,27 @@ async function handleQuery(cmd) {
   const liveDate = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const chosenVoice = STATE.voice || "Puck";
 
-  // Build the conversation memory as text
+  // Conversation memory
   let conversationHistoryText = "";
   if (STATE.conversation.length > 0) {
-    const recent = STATE.conversation.slice(-6);
-    conversationHistoryText = "Here is what we have been talking about recently:\n" +
+    const recent = STATE.conversation.slice(-4);
+    conversationHistoryText = "Recent conversation context:\n" +
       recent.map(m => `${m.sender}: ${m.text}`).join("\n") +
-      "\n\nNow continue the conversation naturally:\n";
+      "\n\nContinue dialogue:\n";
   }
 
   const finalPrompt = `${conversationHistoryText}Monde: ${cmd}`;
 
-  // This is the EXACT payload structure that worked at 21:23
   const requestBody = {
     contents: [{
       parts: [{ text: finalPrompt }]
     }],
     systemInstruction: {
       parts: [{
-        text: `You are Monde AI, a personal companion created for Monde Dubasi.
-Today's actual real-time date is ${liveDate}, and the current year is ${now.getFullYear()}.
-You are actively chatting with Monde. Use the recent conversation to remember what was said and keep the dialogue flowing naturally.
-Always answer in concise, natural, fluent English (1 to 2 sentences max). Do not use bullet points or markdown symbols because your response is spoken aloud.`
+        text: `You are Monde AI, personal companion for Monde Dubasi.
+Today's date is ${liveDate}, year is ${now.getFullYear()}.
+Stay in natural dialogue using the conversation context.
+Answer in 1 or 2 concise, punchy sentences in fluent English. Keep responses brief so voice audio generates immediately. Do not use markdown symbols or bullet points.`
       }]
     },
     generationConfig: {
@@ -274,7 +272,8 @@ Always answer in concise, natural, fluent English (1 to 2 sentences max). Do not
   };
 
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${STATE.apiKey}`;
+    // UPDATED TO gemini-3.8-flash
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${STATE.apiKey}`;
     
     const res = await fetch(url, {
       method: 'POST',
@@ -300,16 +299,15 @@ Always answer in concise, natural, fluent English (1 to 2 sentences max). Do not
       }
 
       if (replyText) {
-        // Save to memory
         STATE.conversation.push({ sender: 'Monde', text: cmd });
         STATE.conversation.push({ sender: 'MONDE AI', text: replyText });
-        if (STATE.conversation.length > 20) STATE.conversation = STATE.conversation.slice(-20);
+        if (STATE.conversation.length > 16) STATE.conversation = STATE.conversation.slice(-16);
         localStorage.setItem('MONDE_CHAT_HISTORY', JSON.stringify(STATE.conversation));
 
         appendMsg('MONDE AI', replyText);
       }
       
-      // Play the voice out loud
+      // Play audio out loud
       if (audioBase64) {
         playBase64Audio(audioBase64, audioMime);
       } else {
