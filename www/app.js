@@ -223,7 +223,7 @@ function toggleMic() {
 if (micBtn) micBtn.onclick = toggleMic;
 if (orb) orb.onclick = toggleMic;
 
-// --- DUAL-MODALITY QUERY: GEMINI 3.8 FLASH ---
+// --- DUAL-MODALITY QUERY WITH AUTO-FALLBACK AGAINST HIGH DEMAND ---
 async function handleQuery(cmd) {
   if (!STATE.apiKey) {
     appendMsg('MONDE AI', 'Please tap Settings and enter your API key.');
@@ -236,7 +236,7 @@ async function handleQuery(cmd) {
   const liveDate = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const chosenVoice = STATE.voice || "Puck";
 
-  // Conversation memory
+  // Build context
   let conversationHistoryText = "";
   if (STATE.conversation.length > 0) {
     const recent = STATE.conversation.slice(-4);
@@ -271,55 +271,68 @@ Answer in 1 or 2 concise, punchy sentences in fluent English. Keep responses bri
     }
   };
 
-  try {
-    // UPDATED TO gemini-3.8-flash
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${STATE.apiKey}`;
-    
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody)
-    });
+  // If one model hits high demand, the other responds instantly
+  const modelCandidates = ['gemini-3.8-flash', 'gemini-3.5-flash-lite'];
+  let successData = null;
 
-    const d = await res.json();
-    
-    if (d.candidates && d.candidates[0].content && d.candidates[0].content.parts) {
-      let replyText = "";
-      let audioBase64 = null;
-      let audioMime = "audio/wav";
-
-      for (const part of d.candidates[0].content.parts) {
-        if (part.text) {
-          replyText += part.text;
-        }
-        if (part.inlineData) {
-          audioBase64 = part.inlineData.data;
-          audioMime = part.inlineData.mimeType || "audio/wav";
-        }
-      }
-
-      if (replyText) {
-        STATE.conversation.push({ sender: 'Monde', text: cmd });
-        STATE.conversation.push({ sender: 'MONDE AI', text: replyText });
-        if (STATE.conversation.length > 16) STATE.conversation = STATE.conversation.slice(-16);
-        localStorage.setItem('MONDE_CHAT_HISTORY', JSON.stringify(STATE.conversation));
-
-        appendMsg('MONDE AI', replyText);
-      }
+  for (const model of modelCandidates) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${STATE.apiKey}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      });
+      const d = await res.json();
       
-      // Play audio out loud
-      if (audioBase64) {
-        playBase64Audio(audioBase64, audioMime);
-      } else {
-        if (statusLabel) statusLabel.innerText = "READY, MONDE";
+      // If server returns high-demand or error, continue to backup model
+      if (d.error && (d.error.code === 503 || d.error.message.includes('high demand'))) {
+        console.log(`${model} busy, switching to backup...`);
+        continue;
       }
 
-    } else if (d.error) {
-      appendMsg('MONDE AI', 'Error: ' + d.error.message);
+      if (d.candidates && d.candidates[0].content && d.candidates[0].content.parts) {
+        successData = d;
+        break; // Got our answer!
+      }
+    } catch (e) {
+      console.log(`${model} error, trying next...`);
+    }
+  }
+
+  if (successData) {
+    let replyText = "";
+    let audioBase64 = null;
+    let audioMime = "audio/wav";
+
+    for (const part of successData.candidates[0].content.parts) {
+      if (part.text) {
+        replyText += part.text;
+      }
+      if (part.inlineData) {
+        audioBase64 = part.inlineData.data;
+        audioMime = part.inlineData.mimeType || "audio/wav";
+      }
+    }
+
+    if (replyText) {
+      STATE.conversation.push({ sender: 'Monde', text: cmd });
+      STATE.conversation.push({ sender: 'MONDE AI', text: replyText });
+      if (STATE.conversation.length > 16) STATE.conversation = STATE.conversation.slice(-16);
+      localStorage.setItem('MONDE_CHAT_HISTORY', JSON.stringify(STATE.conversation));
+
+      appendMsg('MONDE AI', replyText);
+    }
+    
+    // Play voice audio out loud
+    if (audioBase64) {
+      playBase64Audio(audioBase64, audioMime);
+    } else {
       if (statusLabel) statusLabel.innerText = "READY, MONDE";
     }
-  } catch(e) {
-    appendMsg('MONDE AI', 'Connection error: ' + e.message);
+
+  } else {
+    appendMsg('MONDE AI', 'Servers are momentarily busy. Please tap send again in a moment.');
     if (statusLabel) statusLabel.innerText = "READY, MONDE";
   }
 }
