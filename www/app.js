@@ -1,6 +1,5 @@
 const STATE = {
   apiKey: localStorage.getItem('MONDE_KEY') || '',
-  voice: localStorage.getItem('MONDE_VOICE') || 'Puck',
   isListening: false,
   isProcessing: false,
   conversation: JSON.parse(localStorage.getItem('MONDE_CHAT_HISTORY')) || []
@@ -15,7 +14,6 @@ const btnNewChat = document.getElementById('btn-new-chat');
 const modalSettings = document.getElementById('modal-settings');
 const modalMemory = document.getElementById('modal-memory');
 const inputKey = document.getElementById('input-api-key');
-const selectVoice = document.getElementById('select-voice');
 const btnTestVoice = document.getElementById('btn-test-voice');
 
 const textForm = document.getElementById('text-form');
@@ -23,9 +21,8 @@ const textInput = document.getElementById('input-text-msg');
 const textSendBtn = document.getElementById('btn-text-send');
 
 if (inputKey && STATE.apiKey) inputKey.value = STATE.apiKey;
-if (selectVoice && STATE.voice) selectVoice.value = STATE.voice;
 
-// Restore saved messages on startup
+// Restore saved messages
 window.onload = () => {
   if (STATE.conversation.length > 0) {
     chat.innerHTML = '';
@@ -35,7 +32,7 @@ window.onload = () => {
   }
 };
 
-// + New Chat: Clears history and starts fresh
+// + New Chat: Starts fresh
 if (btnNewChat) {
   btnNewChat.onclick = () => {
     STATE.conversation = [];
@@ -46,7 +43,7 @@ if (btnNewChat) {
         <div class="text-base leading-relaxed">Fresh conversation started, Monde. What's on your mind?</div>
       </div>
     `;
-    handleQuery("Greet Monde and let him know you are ready for a new conversation.");
+    handleQuery("Start a fresh conversation and greet Monde.");
   };
 }
 
@@ -54,7 +51,6 @@ if (btnNewChat) {
 document.getElementById('btn-settings').onclick = () => {
   modalSettings.classList.toggle('hidden');
   if (inputKey) inputKey.value = STATE.apiKey;
-  if (selectVoice) selectVoice.value = STATE.voice;
 };
 
 const btnCloseSettings = document.getElementById('btn-close-settings');
@@ -64,12 +60,10 @@ if (btnCloseSettings) {
 
 document.getElementById('btn-save-settings').onclick = () => {
   STATE.apiKey = inputKey.value.trim();
-  STATE.voice = selectVoice.value;
   localStorage.setItem('MONDE_KEY', STATE.apiKey);
-  localStorage.setItem('MONDE_VOICE', STATE.voice);
   modalSettings.classList.add('hidden');
-  appendMsg('MONDE AI', 'Settings saved!');
-  handleQuery("Say hello to Monde and confirm your voice is working.");
+  appendMsg('MONDE AI', 'Key saved!');
+  handleQuery("Say hello to Monde and confirm your voice is ready.");
 };
 
 // Memory Modal
@@ -82,7 +76,7 @@ if (btnCloseMemory && modalMemory) {
   btnCloseMemory.onclick = () => modalMemory.classList.add('hidden');
 }
 
-// Chat UI Bubbles
+// Chat Bubbles
 function renderBubble(sender, text) {
   if (!chat) return;
   const d = document.createElement('div');
@@ -109,7 +103,7 @@ function appendMsg(sender, text) {
   renderBubble(sender, text);
 }
 
-// Play Base64 Audio Output
+// --- EXACT WORKING 21:23 AUDIO ENGINE ---
 let currentAudio = null;
 
 function playBase64Audio(base64Data, mimeType = 'audio/wav') {
@@ -223,7 +217,7 @@ function toggleMic() {
 if (micBtn) micBtn.onclick = toggleMic;
 if (orb) orb.onclick = toggleMic;
 
-// --- DUAL-MODALITY QUERY WITH AUTO-FALLBACK AGAINST HIGH DEMAND ---
+// --- DUAL-MODALITY QUERY: STRICT MONDE VOICE ONLY ---
 async function handleQuery(cmd) {
   if (!STATE.apiKey) {
     appendMsg('MONDE AI', 'Please tap Settings and enter your API key.');
@@ -234,15 +228,14 @@ async function handleQuery(cmd) {
 
   const now = new Date();
   const liveDate = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-  const chosenVoice = STATE.voice || "Puck";
 
-  // Build context
+  // Conversation context memory
   let conversationHistoryText = "";
   if (STATE.conversation.length > 0) {
     const recent = STATE.conversation.slice(-4);
-    conversationHistoryText = "Recent conversation context:\n" +
+    conversationHistoryText = "Recent context:\n" +
       recent.map(m => `${m.sender}: ${m.text}`).join("\n") +
-      "\n\nContinue dialogue:\n";
+      "\n\nNow continue:\n";
   }
 
   const finalPrompt = `${conversationHistoryText}Monde: ${cmd}`;
@@ -264,75 +257,61 @@ Answer in 1 or 2 concise, punchy sentences in fluent English. Keep responses bri
       speechConfig: {
         voiceConfig: {
           prebuiltVoiceConfig: {
-            voiceName: chosenVoice
+            voiceName: "Puck" // 100% Monde Voice
           }
         }
       }
     }
   };
 
-  // If one model hits high demand, the other responds instantly
-  const modelCandidates = ['gemini-3.8-flash', 'gemini-3.5-flash-lite'];
-  let successData = null;
-
-  for (const model of modelCandidates) {
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${STATE.apiKey}`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody)
-      });
-      const d = await res.json();
-      
-      // If server returns high-demand or error, continue to backup model
-      if (d.error && (d.error.code === 503 || d.error.message.includes('high demand'))) {
-        console.log(`${model} busy, switching to backup...`);
-        continue;
-      }
-
-      if (d.candidates && d.candidates[0].content && d.candidates[0].content.parts) {
-        successData = d;
-        break; // Got our answer!
-      }
-    } catch (e) {
-      console.log(`${model} error, trying next...`);
-    }
-  }
-
-  if (successData) {
-    let replyText = "";
-    let audioBase64 = null;
-    let audioMime = "audio/wav";
-
-    for (const part of successData.candidates[0].content.parts) {
-      if (part.text) {
-        replyText += part.text;
-      }
-      if (part.inlineData) {
-        audioBase64 = part.inlineData.data;
-        audioMime = part.inlineData.mimeType || "audio/wav";
-      }
-    }
-
-    if (replyText) {
-      STATE.conversation.push({ sender: 'Monde', text: cmd });
-      STATE.conversation.push({ sender: 'MONDE AI', text: replyText });
-      if (STATE.conversation.length > 16) STATE.conversation = STATE.conversation.slice(-16);
-      localStorage.setItem('MONDE_CHAT_HISTORY', JSON.stringify(STATE.conversation));
-
-      appendMsg('MONDE AI', replyText);
-    }
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${STATE.apiKey}`;
     
-    // Play voice audio out loud
-    if (audioBase64) {
-      playBase64Audio(audioBase64, audioMime);
-    } else {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody)
+    });
+
+    const d = await res.json();
+    
+    if (d.candidates && d.candidates[0].content && d.candidates[0].content.parts) {
+      let replyText = "";
+      let audioBase64 = null;
+      let audioMime = "audio/wav";
+
+      for (const part of d.candidates[0].content.parts) {
+        if (part.text) {
+          replyText += part.text;
+        }
+        if (part.inlineData) {
+          audioBase64 = part.inlineData.data;
+          audioMime = part.inlineData.mimeType || "audio/wav";
+        }
+      }
+
+      if (replyText) {
+        STATE.conversation.push({ sender: 'Monde', text: cmd });
+        STATE.conversation.push({ sender: 'MONDE AI', text: replyText });
+        if (STATE.conversation.length > 16) STATE.conversation = STATE.conversation.slice(-16);
+        localStorage.setItem('MONDE_CHAT_HISTORY', JSON.stringify(STATE.conversation));
+
+        appendMsg('MONDE AI', replyText);
+      }
+      
+      // Play the Monde voice out loud directly through your speakers
+      if (audioBase64) {
+        playBase64Audio(audioBase64, audioMime);
+      } else {
+        if (statusLabel) statusLabel.innerText = "READY, MONDE";
+      }
+
+    } else if (d.error) {
+      appendMsg('MONDE AI', 'Error: ' + d.error.message);
       if (statusLabel) statusLabel.innerText = "READY, MONDE";
     }
-
-  } else {
-    appendMsg('MONDE AI', 'Servers are momentarily busy. Please tap send again in a moment.');
+  } catch(e) {
+    appendMsg('MONDE AI', 'Connection error: ' + e.message);
     if (statusLabel) statusLabel.innerText = "READY, MONDE";
   }
 }
