@@ -32,7 +32,7 @@ window.onload = () => {
   }
 };
 
-// + New Chat: Starts fresh
+// + New Chat
 if (btnNewChat) {
   btnNewChat.onclick = () => {
     STATE.conversation = [];
@@ -103,7 +103,7 @@ function appendMsg(sender, text) {
   renderBubble(sender, text);
 }
 
-// --- EXACT WORKING 21:23 AUDIO ENGINE ---
+// Base64 Audio Playback Engine
 let currentAudio = null;
 
 function playBase64Audio(base64Data, mimeType = 'audio/wav') {
@@ -217,8 +217,8 @@ function toggleMic() {
 if (micBtn) micBtn.onclick = toggleMic;
 if (orb) orb.onclick = toggleMic;
 
-// --- DUAL-MODALITY QUERY: STRICT MONDE VOICE ONLY ---
-async function handleQuery(cmd) {
+// --- DUAL-MODALITY QUERY: GEMINI 3.8 FLASH (WITH AUTO-RETRY) ---
+async function handleQuery(cmd, retryCount = 0) {
   if (!STATE.apiKey) {
     appendMsg('MONDE AI', 'Please tap Settings and enter your API key.');
     return;
@@ -257,7 +257,7 @@ Answer in 1 or 2 concise, punchy sentences in fluent English. Keep responses bri
       speechConfig: {
         voiceConfig: {
           prebuiltVoiceConfig: {
-            voiceName: "Puck" // 100% Monde Voice
+            voiceName: "Puck" // Monde Voice
           }
         }
       }
@@ -265,7 +265,8 @@ Answer in 1 or 2 concise, punchy sentences in fluent English. Keep responses bri
   };
 
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${STATE.apiKey}`;
+    // UPDATED TO gemini-3.8-flash
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${STATE.apiKey}`;
     
     const res = await fetch(url, {
       method: 'POST',
@@ -274,6 +275,13 @@ Answer in 1 or 2 concise, punchy sentences in fluent English. Keep responses bri
     });
 
     const d = await res.json();
+
+    // Auto-retry once on high demand
+    if (d.error && (d.error.code === 503 || d.error.message.includes('demand')) && retryCount < 1) {
+      if (statusLabel) statusLabel.innerText = "Retrying...";
+      await new Promise(r => setTimeout(r, 1500));
+      return handleQuery(cmd, retryCount + 1);
+    }
     
     if (d.candidates && d.candidates[0].content && d.candidates[0].content.parts) {
       let replyText = "";
@@ -299,7 +307,7 @@ Answer in 1 or 2 concise, punchy sentences in fluent English. Keep responses bri
         appendMsg('MONDE AI', replyText);
       }
       
-      // Play the Monde voice out loud directly through your speakers
+      // Play Monde voice
       if (audioBase64) {
         playBase64Audio(audioBase64, audioMime);
       } else {
