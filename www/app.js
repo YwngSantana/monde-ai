@@ -22,7 +22,7 @@ const textSendBtn = document.getElementById('btn-text-send');
 
 if (inputKey && STATE.apiKey) inputKey.value = STATE.apiKey;
 
-// Restore saved messages
+// Restore saved messages on startup
 window.onload = () => {
   if (STATE.conversation.length > 0) {
     chat.innerHTML = '';
@@ -32,7 +32,7 @@ window.onload = () => {
   }
 };
 
-// + New Chat
+// + New Chat: Starts fresh
 if (btnNewChat) {
   btnNewChat.onclick = () => {
     STATE.conversation = [];
@@ -43,7 +43,7 @@ if (btnNewChat) {
         <div class="text-base leading-relaxed">Fresh conversation started, Monde. What's on your mind?</div>
       </div>
     `;
-    handleQuery("Start a fresh conversation and greet Monde.");
+    handleQuery("Greet Monde and tell him you are ready for a new conversation.");
   };
 }
 
@@ -62,7 +62,8 @@ document.getElementById('btn-save-settings').onclick = () => {
   STATE.apiKey = inputKey.value.trim();
   localStorage.setItem('MONDE_KEY', STATE.apiKey);
   modalSettings.classList.add('hidden');
-  appendMsg('MONDE AI', 'Key saved!');
+  appendMsg('MONDE AI', 'API key saved!');
+  playHardwareBeep();
   handleQuery("Say hello to Monde and confirm your voice is ready.");
 };
 
@@ -76,7 +77,7 @@ if (btnCloseMemory && modalMemory) {
   btnCloseMemory.onclick = () => modalMemory.classList.add('hidden');
 }
 
-// Chat Bubbles
+// Render Chat Bubble
 function renderBubble(sender, text) {
   if (!chat) return;
   const d = document.createElement('div');
@@ -103,7 +104,32 @@ function appendMsg(sender, text) {
   renderBubble(sender, text);
 }
 
-// Base64 Audio Playback Engine
+// Hardware Beep (Plays directly through phone speakers with zero network latency)
+function playHardwareBeep() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(523.25, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(783.99, ctx.currentTime + 0.12);
+
+    gain.gain.setValueAtTime(0.35, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.25);
+  } catch (e) {
+    console.log("Beep error:", e);
+  }
+}
+
+// Play Base64 Audio returned directly by Gemini
 let currentAudio = null;
 
 function playBase64Audio(base64Data, mimeType = 'audio/wav') {
@@ -113,7 +139,7 @@ function playBase64Audio(base64Data, mimeType = 'audio/wav') {
       currentAudio = null;
     }
 
-    if (statusLabel) statusLabel.innerText = "Speaking...";
+    if (statusLabel) statusLabel.innerText = "SPEAKING...";
 
     const audioUrl = `data:${mimeType};base64,${base64Data}`;
     currentAudio = new Audio(audioUrl);
@@ -123,7 +149,7 @@ function playBase64Audio(base64Data, mimeType = 'audio/wav') {
     };
 
     currentAudio.play().catch(e => {
-      console.log("Audio play error:", e);
+      console.log("Audio playback error:", e);
       if (statusLabel) statusLabel.innerText = "READY, MONDE";
     });
 
@@ -133,10 +159,29 @@ function playBase64Audio(base64Data, mimeType = 'audio/wav') {
   }
 }
 
+// Fallback TTS: Reads aloud via Android speech synthesizer if network audio drops
+function speakFallback(text) {
+  const clean = text.replace(/[*#_`~]/g, '').trim();
+  if (!clean) return;
+
+  if (window.speechSynthesis) {
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(clean);
+    u.pitch = 0.88;
+    u.rate = 1.0;
+    u.lang = 'en-US';
+    u.onend = () => {
+      if (statusLabel) statusLabel.innerText = "READY, MONDE";
+    };
+    window.speechSynthesis.speak(u);
+  }
+}
+
 // Test Voice Button
 if (btnTestVoice) {
   btnTestVoice.onclick = () => {
-    handleQuery("Introduce yourself in one sentence with your name Monde.");
+    playHardwareBeep();
+    handleQuery("Introduce yourself in one short sentence with your name Monde.");
   };
 }
 
@@ -217,8 +262,8 @@ function toggleMic() {
 if (micBtn) micBtn.onclick = toggleMic;
 if (orb) orb.onclick = toggleMic;
 
-// --- DUAL-MODALITY QUERY: GEMINI 3.8 FLASH (WITH AUTO-RETRY) ---
-async function handleQuery(cmd, retryCount = 0) {
+// FAST QUERY: GEMINI 3.8 FLASH WITH LOW THINKING (SUB-2-SECOND RESPONSE)
+async function handleQuery(cmd) {
   if (!STATE.apiKey) {
     appendMsg('MONDE AI', 'Please tap Settings and enter your API key.');
     return;
@@ -229,11 +274,11 @@ async function handleQuery(cmd, retryCount = 0) {
   const now = new Date();
   const liveDate = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
-  // Conversation context memory
+  // Add conversation memory
   let conversationHistoryText = "";
   if (STATE.conversation.length > 0) {
     const recent = STATE.conversation.slice(-4);
-    conversationHistoryText = "Recent context:\n" +
+    conversationHistoryText = "Recent dialogue:\n" +
       recent.map(m => `${m.sender}: ${m.text}`).join("\n") +
       "\n\nNow continue:\n";
   }
@@ -257,15 +302,18 @@ Answer in 1 or 2 concise, punchy sentences in fluent English. Keep responses bri
       speechConfig: {
         voiceConfig: {
           prebuiltVoiceConfig: {
-            voiceName: "Puck" // Monde Voice
+            voiceName: "Puck"
           }
         }
+      },
+      // Disables deep multi-step thinking to keep response time fast
+      thinkingConfig: {
+        thinkingLevel: "low"
       }
     }
   };
 
   try {
-    // UPDATED TO gemini-3.8-flash
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${STATE.apiKey}`;
     
     const res = await fetch(url, {
@@ -275,13 +323,6 @@ Answer in 1 or 2 concise, punchy sentences in fluent English. Keep responses bri
     });
 
     const d = await res.json();
-
-    // Auto-retry once on high demand
-    if (d.error && (d.error.code === 503 || d.error.message.includes('demand')) && retryCount < 1) {
-      if (statusLabel) statusLabel.innerText = "Retrying...";
-      await new Promise(r => setTimeout(r, 1500));
-      return handleQuery(cmd, retryCount + 1);
-    }
     
     if (d.candidates && d.candidates[0].content && d.candidates[0].content.parts) {
       let replyText = "";
@@ -307,9 +348,12 @@ Answer in 1 or 2 concise, punchy sentences in fluent English. Keep responses bri
         appendMsg('MONDE AI', replyText);
       }
       
-      // Play Monde voice
+      // 1. Play base64 audio directly
       if (audioBase64) {
         playBase64Audio(audioBase64, audioMime);
+      } else if (replyText) {
+        // 2. Fallback to phone TTS if audio data was not returned
+        speakFallback(replyText);
       } else {
         if (statusLabel) statusLabel.innerText = "READY, MONDE";
       }
